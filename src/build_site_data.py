@@ -1,11 +1,12 @@
 """
-Step 3: Package the price data and the events list for the website.
+Package the price data, inflation adjustment and events list for the website.
 
 The web page (site/index.html) can't read our CSV files directly when it is
 opened by double-clicking, so we convert them into one JavaScript file,
 site/data.js, that the page loads.
 
-Run after download_prices.py (and whenever you edit data/events.csv):
+Run after download_prices.py and download_indicators.py
+(and whenever you edit data/events.csv):
     python src/build_site_data.py
 """
 
@@ -14,9 +15,40 @@ import json
 import pandas as pd
 
 
+def inflation_factors(dates: pd.Series, cpi: pd.Series) -> tuple[pd.Series, pd.Timestamp]:
+    """
+    For each day, the number to multiply that day's price by to express it
+    in "today's dollars" (the dollars of the latest CPI month).
+
+        real price = nominal price x (CPI latest / CPI in that month)
+
+    Example: CPI was ~219 in July 2008 and ~337 in Oct 2026.
+    $144 in July 2008 x 337/219 = ~$222 in Oct-2026 dollars.
+    """
+    # A single missing month (Oct 2025, never published) is filled with the
+    # average of the months either side ("linear interpolation").
+    cpi = cpi.interpolate()
+
+    base_month = cpi.index.max()
+    base_cpi = cpi.loc[base_month]
+
+    # Match every daily date to the CPI of its month.
+    month_start = dates.dt.to_period("M").dt.to_timestamp()
+    cpi_daily = month_start.map(cpi)
+    # Days after the last published CPI month (e.g. November) use the latest CPI.
+    cpi_daily = cpi_daily.fillna(base_cpi)
+
+    return base_cpi / cpi_daily, base_month
+
+
 def main() -> None:
     prices = pd.read_csv("data/raw/oil_prices_daily.csv", parse_dates=["date"])
+    cpi = pd.read_csv("data/raw/cpi_monthly.csv", parse_dates=["date"], index_col="date")["cpi"]
     events = pd.read_csv("data/events.csv")
+
+    factor, base_month = inflation_factors(prices["date"], cpi)
+    prices["brent_real"] = prices["brent"] * factor
+    prices["wti_real"] = prices["wti"] * factor
 
     def column(name: str) -> list:
         # Missing values (NaN) become None, which JavaScript reads as null (a gap in the line).
@@ -26,8 +58,11 @@ def main() -> None:
         "dates": prices["date"].dt.strftime("%Y-%m-%d").tolist(),
         "brent": column("brent"),
         "wti": column("wti"),
+        "brent_real": column("brent_real"),
+        "wti_real": column("wti_real"),
+        "real_base": base_month.strftime("%b %Y"),
         "events": events.to_dict(orient="records"),
-        "source": "FRED (DCOILBRENTEU, DCOILWTICO)",
+        "source": "FRED (DCOILBRENTEU, DCOILWTICO, CPIAUCSL)",
         "last_date": prices["date"].max().strftime("%Y-%m-%d"),
     }
 
@@ -39,6 +74,7 @@ def main() -> None:
         f.write(";\n")
 
     print(f"Wrote {len(data['dates'])} days and {len(data['events'])} events to {out_path}")
+    print(f"Real prices are in {data['real_base']} dollars")
 
 
 if __name__ == "__main__":
