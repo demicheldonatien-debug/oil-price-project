@@ -72,6 +72,17 @@
     #real-btn[aria-pressed="true"] { background: var(--real); border-color: var(--real); color: #000; }
     #compare-btn[aria-pressed="true"] { background: var(--amber); color: #000; }
     button:disabled { opacity: 0.35; cursor: not-allowed; }
+    #live-btn { border-color: var(--real); color: var(--real); }
+    #live-btn[aria-pressed="true"] { background: var(--real); color: #000; }
+    .live-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--real); margin-right: 6px; vertical-align: middle;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 50% { opacity: 0.25; } }
+    @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+    .up { color: var(--real); }
+    .down { color: var(--event); }
     #mode { font-size: 12px; color: var(--muted); }
     #chart { width: 100%; height: calc(100vh - 150px); min-height: 420px; }
     footer {
@@ -93,6 +104,8 @@
     <button id="events-btn" aria-pressed="false">Major Events</button>
     <button id="real-btn" aria-pressed="false">Inflation Adj</button>
     <button id="compare-btn" aria-pressed="false">Compare</button>
+    <!-- Only appears when live.json exists, i.e. when src/live_server.py is running. -->
+    <button id="live-btn" aria-pressed="false" hidden>Live 5D</button>
     <span id="mode"></span>
   </div>
 
@@ -114,15 +127,35 @@
     const DAY = 24 * 3600 * 1000;
 
     // ---- What is switched on. Every button click changes this, then redraws.
-    const state = { events: false, real: false, compare: false };
+    const state = { events: false, real: false, compare: false, live: false };
+
+    // Live prices from Yahoo (filled in by pollLive below, if live_server.py is running).
+    let LIVE = null;
 
     // ---- Header: latest prices -------------------------------------------
     const last = arr => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; };
-    document.getElementById("quotes").innerHTML =
-      `<span>BRENT <b>$${last(D.brent).toFixed(2)}</b></span>` +
-      `<span>WTI <b>$${last(D.wti).toFixed(2)}</b></span>` +
-      `<span>AS OF ${D.last_date}</span>`;
-    document.getElementById("footer").textContent =
+    function updateQuotes() {
+      const q = document.getElementById("quotes");
+      if (!LIVE) {
+        q.innerHTML =
+          `<span>BRENT <b>$${last(D.brent).toFixed(2)}</b></span>` +
+          `<span>WTI <b>$${last(D.wti).toFixed(2)}</b></span>` +
+          `<span>AS OF ${D.last_date}</span>`;
+        return;
+      }
+      const quote = (label, x) => {
+        const pct = (x.last / x.prev_close - 1) * 100;
+        const cls = pct >= 0 ? "up" : "down";
+        return `<span>${label} <b>$${x.last.toFixed(2)}</b> ` +
+          `<span class="${cls}">${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%</span></span>`;
+      };
+      q.innerHTML =
+        `<span><span class="live-dot"></span>LIVE</span>` +
+        quote("BRENT", LIVE.brent) + quote("WTI", LIVE.wti) +
+        `<span>${LIVE.brent.last_time.slice(11)} NEW YORK</span>`;
+    }
+    updateQuotes();
+    const dailyFooter =
       `Source: ${D.source}. Daily closing prices in US$ per barrel. ` +
       `Inflation-adjusted prices use US CPI and are expressed in ${D.real_base} dollars.`;
 
@@ -254,11 +287,48 @@
       return layout;
     }
 
+    // ---- Live view: the last 5 days in 15-minute steps ---------------------
+    function liveTraces() {
+      const line = (name, x, color) => ({
+        name: name + " futures", x: x.times, y: x.prices, type: "scatter", mode: "lines",
+        line: { color, width: 1.5 },
+        hovertemplate: `${name}: $%{y:.2f}<extra></extra>`,
+      });
+      return [line("Brent", LIVE.brent, css("--brent")), line("WTI", LIVE.wti, css("--wti"))];
+    }
+
+    function liveLayout() {
+      const layout = buildLayout(undefined);
+      layout.xaxis.rangeselector = { visible: false };
+      layout.yaxis = { title: "US$ / barrel", gridcolor: css("--grid"), tickprefix: "$", autorange: true };
+      layout.shapes = [];
+      layout.annotations = [];
+      return layout;
+    }
+
     const chart = document.getElementById("chart");
+    let wasLive = false;
     function render() {
-      // Keep the current zoom when switching modes.
-      const xRange = chart.layout ? chart.layout.xaxis.range : undefined;
-      Plotly.react(chart, buildTraces(), buildLayout(xRange), { responsive: true, displayModeBar: false });
+      const config = { responsive: true, displayModeBar: false };
+      const others = ["events-btn", "real-btn", "compare-btn"].map(id => document.getElementById(id));
+      if (state.live) {
+        Plotly.react(chart, liveTraces(), liveLayout(), config);
+        const updated = new Date(LIVE.updated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        document.getElementById("mode").textContent =
+          `${LIVE.source}. Last fetched at ${updated} your time.`;
+        others.forEach(b => b.disabled = true);
+        document.getElementById("footer").textContent =
+          "Front-month futures prices, New York time. Brent: ICE; WTI: NYMEX. " +
+          "Change % is versus the previous trading day's last price.";
+        wasLive = true;
+        return;
+      }
+      others.forEach(b => b.disabled = false);
+      document.getElementById("footer").textContent = dailyFooter;
+      // Keep the current zoom when switching modes (but not when leaving the live view).
+      const xRange = chart.layout && !wasLive ? chart.layout.xaxis.range : undefined;
+      wasLive = false;
+      Plotly.react(chart, buildTraces(), buildLayout(xRange), config);
       document.getElementById("mode").textContent = state.compare
         ? `Comparing Brent as on the day vs in ${D.real_base} dollars; bottom panel = the difference`
         : state.real
@@ -279,8 +349,29 @@
     toggle(document.getElementById("events-btn"), "events");
     toggle(document.getElementById("real-btn"), "real");
     toggle(document.getElementById("compare-btn"), "compare");
+    toggle(document.getElementById("live-btn"), "live");
+
+    // ---- Check for live prices every minute ------------------------------
+    // live_server.py rewrites live.json every 15 minutes; checking every
+    // minute means the page shows new prices soon after they arrive.
+    async function pollLive() {
+      try {
+        const response = await fetch("live.json", { cache: "no-store" });
+        if (!response.ok) return;  // live server not running: stay on daily data
+        const fresh = await response.json();
+        const changed = !LIVE || fresh.updated !== LIVE.updated;
+        LIVE = fresh;
+        document.getElementById("live-btn").hidden = false;
+        updateQuotes();
+        if (changed && state.live) render();
+      } catch (error) {
+        // Opened as a file, or offline: live prices aren't available.
+      }
+    }
 
     render();
+    pollLive();
+    setInterval(pollLive, 60 * 1000);
   });
   </script>
 </body>
