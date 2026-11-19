@@ -58,6 +58,13 @@ def fetch_live() -> dict:
     return data
 
 
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """Serves the website files, without printing a line for every request."""
+
+    def log_message(self, *args) -> None:
+        pass
+
+
 def refresh_forever() -> None:
     while True:
         try:
@@ -78,8 +85,7 @@ def refresh_forever() -> None:
 def main() -> None:
     threading.Thread(target=refresh_forever, daemon=True).start()
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=SITE_DIR)
-    handler.log_message = lambda *args: None  # keep the terminal quiet
+    handler = functools.partial(QuietHandler, directory=SITE_DIR)
     server = http.server.ThreadingHTTPServer(("localhost", PORT), handler)
     print(f"Website running: open http://localhost:{PORT}  (Ctrl+C to stop)")
     try:
