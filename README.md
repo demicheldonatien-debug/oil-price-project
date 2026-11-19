@@ -8,6 +8,8 @@ economic indicators and world events, and eventually test a rules-based trading 
 2. Economic indicators – inflation ✅ (Inflation Adj button), interest rates, US dollar, inventories, production
 3. Event timeline – wars, OPEC decisions, crises, and how prices reacted
 4. Models – explain past moves, then forecast (honestly evaluated)
+   - ARIMA ✅ `python src/forecast_arima.py` → results/arima_*.csv, charts/02_arima_forecast.png.
+     Finding: the best ARIMA is ARIMA(0,1,0) = "no change"; nothing beat it on 2015-2026.
 5. Trading rules + backtest
 6. Paper trading (simulated money) via a broker API
 
