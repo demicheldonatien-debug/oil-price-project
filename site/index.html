@@ -70,6 +70,8 @@
     button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
     #events-btn[aria-pressed="true"] { background: var(--event); border-color: var(--event); color: #000; }
     #real-btn[aria-pressed="true"] { background: var(--real); border-color: var(--real); color: #000; }
+    #compare-btn[aria-pressed="true"] { background: var(--amber); color: #000; }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
     #mode { font-size: 12px; color: var(--muted); }
     #chart { width: 100%; height: calc(100vh - 150px); min-height: 420px; }
     footer {
@@ -90,6 +92,7 @@
   <div class="toolbar">
     <button id="events-btn" aria-pressed="false">Major Events</button>
     <button id="real-btn" aria-pressed="false">Inflation Adj</button>
+    <button id="compare-btn" aria-pressed="false">Compare</button>
     <span id="mode"></span>
   </div>
 
@@ -111,7 +114,7 @@
     const DAY = 24 * 3600 * 1000;
 
     // ---- What is switched on. Every button click changes this, then redraws.
-    const state = { events: false, real: false };
+    const state = { events: false, real: false, compare: false };
 
     // ---- Header: latest prices -------------------------------------------
     const last = arr => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; };
@@ -124,7 +127,13 @@
       `Inflation-adjusted prices use US CPI and are expressed in ${D.real_base} dollars.`;
 
     // Pick nominal ("as it was on the day") or real ("in today's dollars") prices.
-    const series = name => state.real ? D[name + "_real"] : D[name];
+    // (In Compare mode the main lines are always the nominal ones.)
+    const series = name => state.real && !state.compare ? D[name + "_real"] : D[name];
+
+    // The "delta": how many dollars inflation adds to each day's Brent price,
+    // and the same as a percentage (= total US inflation since that day).
+    const deltaUsd = D.brent.map((v, i) => v == null ? null : +(D.brent_real[i] - v).toFixed(2));
+    const deltaPct = D.brent.map((v, i) => v == null ? null : (D.brent_real[i] / v - 1) * 100);
 
     // Brent price on an event date (or the next trading day), to place the red diamond.
     const priceOn = (values, date) => {
@@ -136,7 +145,34 @@
     const nextIsClose = i => i + 1 < D.events.length &&
       (new Date(D.events[i + 1].date) - new Date(D.events[i].date)) / DAY < 200;
 
+    function compareTraces() {
+      return [
+        {
+          name: "Brent (as on the day)", x: D.dates, y: D.brent, type: "scatter", mode: "lines",
+          line: { color: css("--brent"), width: 1.3 }, connectgaps: true,
+          hovertemplate: "As on the day: $%{y:.2f}<extra></extra>",
+        },
+        {
+          name: `Brent (${D.real_base} dollars)`, x: D.dates, y: D.brent_real, type: "scatter", mode: "lines",
+          line: { color: css("--real"), width: 1.3 }, connectgaps: true,
+          // Shade the gap between this line and the previous one.
+          fill: "tonexty", fillcolor: "rgba(61, 220, 132, 0.12)",
+          customdata: deltaUsd.map((v, i) => [v, deltaPct[i]]),
+          hovertemplate: `In ${D.real_base} dollars: $%{y:.2f}<br>` +
+            "Delta: +$%{customdata[0]:.2f} (+%{customdata[1]:.0f}%)<extra></extra>",
+        },
+        {
+          name: "Inflation delta", x: D.dates, y: deltaUsd, yaxis: "y2", type: "scatter", mode: "lines",
+          line: { color: css("--real"), width: 1 }, connectgaps: true,
+          fill: "tozeroy", fillcolor: "rgba(61, 220, 132, 0.25)", showlegend: false,
+          customdata: deltaPct,
+          hovertemplate: "Delta: +$%{y:.2f} (+%{customdata:.0f}%)<extra></extra>",
+        },
+      ];
+    }
+
     function buildTraces() {
+      if (state.compare) return [...compareTraces(), ...eventTraces()];
       const suffix = state.real ? " (real)" : "";
       const line = (name, values, color) => ({
         name: name + suffix, x: D.dates, y: values, type: "scatter", mode: "lines",
@@ -147,28 +183,31 @@
         line("Brent", series("brent"), css("--brent")),
         line("WTI", series("wti"), css("--wti")),
       ];
-      if (state.events) {
-        traces.push({
+      return [...traces, ...eventTraces()];
+    }
+
+    function eventTraces() {
+      if (!state.events) return [];
+      return [{
           type: "scatter", mode: "markers", showlegend: false,
           x: D.events.map(e => e.date),
           y: D.events.map(e => priceOn(series("brent"), e.date)),
           marker: { color: css("--event"), size: 9, symbol: "diamond", line: { color: "#000", width: 1 } },
           customdata: D.events.map(e => [e.label, e.description]),
           hovertemplate: "<b>%{customdata[0]}</b><br>%{x}<br>%{customdata[1]}<extra></extra>",
-        });
-      }
-      return traces;
+      }];
     }
 
     function buildLayout(xRange) {
-      const peak = Math.max(...series("brent").filter(v => v != null), ...series("wti").filter(v => v != null));
-      return {
+      const shown = state.compare ? [D.brent_real] : [series("brent"), series("wti")];
+      const peak = Math.max(...shown.flat().filter(v => v != null));
+      const layout = {
         paper_bgcolor: css("--bg"), plot_bgcolor: css("--bg"),
         font: { color: css("--text"), family: getComputedStyle(document.body).fontFamily, size: 12 },
         margin: { l: 56, r: 24, t: 16, b: 40 },
         hovermode: "x unified",
         hoverlabel: { bgcolor: "#111", bordercolor: css("--amber") },
-        legend: { orientation: "h", x: 0, y: 1.06 },
+        legend: { orientation: "h", x: 0, y: 1.06, traceorder: "normal" },
         xaxis: {
           type: "date", gridcolor: css("--grid"), linecolor: css("--grid"),
           range: xRange,
@@ -200,16 +239,33 @@
           font: { color: css("--event"), size: 10 },
         })),
       };
+
+      if (state.compare) {
+        // Two panels sharing the same time axis: prices on top, delta below.
+        layout.yaxis.title = "US$ / barrel";
+        layout.yaxis.domain = [0.34, 1];
+        layout.yaxis2 = {
+          domain: [0, 0.26], anchor: "x", title: "Delta (US$)",
+          gridcolor: css("--grid"), tickprefix: "+$", rangemode: "tozero",
+        };
+        layout.xaxis.anchor = "y2";
+        if (state.events) layout.yaxis.range = [0, peak * 1.75];
+      }
+      return layout;
     }
 
     const chart = document.getElementById("chart");
     function render() {
       // Keep the current zoom when switching modes.
       const xRange = chart.layout ? chart.layout.xaxis.range : undefined;
-      Plotly.react(chart, buildTraces(), buildLayout(xRange), { responsive: true, displaylogo: false });
-      document.getElementById("mode").textContent = state.real
-        ? `Showing prices in ${D.real_base} dollars`
-        : "Showing prices as they were on the day";
+      Plotly.react(chart, buildTraces(), buildLayout(xRange), { responsive: true, displayModeBar: false });
+      document.getElementById("mode").textContent = state.compare
+        ? `Comparing Brent as on the day vs in ${D.real_base} dollars; bottom panel = the difference`
+        : state.real
+          ? `Showing prices in ${D.real_base} dollars`
+          : "Showing prices as they were on the day";
+      // Inflation Adj doesn't apply in Compare mode (Compare already shows both).
+      document.getElementById("real-btn").disabled = state.compare;
     }
 
     // ---- Buttons ---------------------------------------------------------
@@ -222,6 +278,7 @@
     }
     toggle(document.getElementById("events-btn"), "events");
     toggle(document.getElementById("real-btn"), "real");
+    toggle(document.getElementById("compare-btn"), "compare");
 
     render();
   });

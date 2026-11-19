@@ -25,7 +25,9 @@ Open `site/index.html` in your browser (double-click it in Finder / File Explore
 It shows Brent and WTI since 2000. Buttons:
 - **Major Events** shows the events from `data/events.csv` in red.
 - **Inflation Adj** shows prices in today's dollars, adjusted with US CPI
-  (real price = price x CPI latest / CPI that month). To add an event, add a row to `data/events.csv` and re-run
+  (real price = price x CPI latest / CPI that month).
+- **Compare** shows Brent as on the day vs in today's dollars, with the gap shaded,
+  and a bottom panel with the delta (how many dollars inflation adds). To add an event, add a row to `data/events.csv` and re-run
 `python src/build_site_data.py`.
 
 Data source: FRED (Federal Reserve Bank of St. Louis), series DCOILBRENTEU and DCOILWTICO.
